@@ -96,6 +96,66 @@ exports.loginUser = catchAsyncError(
 );
 
 /* ===================================================================================================== */
+/* ============================= LOGIN AUTHORIZATION(POST) (/login/auth) ================================= */
+/* ===================================================================================================== */
+
+exports.loginAuth = catchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const {
+      email,
+      accountType,
+    }: {
+      email: string;
+      name: string;
+      accountType: string;
+    } = req.body;
+
+    //Generating Random UserName
+    function getSixDigitRandom(): number {
+      return Math.floor(100000 + Math.random() * 900000);
+    }
+
+
+    const accountUser = await User.find({ account: accountType });
+    let finalUser = accountUser.filter((val) => val.email === email);
+
+    if (finalUser.length !== 0) {
+      const user = await User.findById(finalUser[0]._id);
+      if (user) {
+        const sessionToken = token(user._id);
+        user.authentication.sessionToken = sessionToken;
+        await user.save();
+        sendToken(user, 201, res);
+      } else {
+        return next(
+          ErrorHandler(
+            "SOMETHING WENT WRONG! PROCCED AFTER SOMETIMES",
+            502,
+            res,
+            next
+          )
+        );
+      }
+    } else {
+      const user = await User.create({
+        email: email,
+        authentication: {
+          password: "123456789",
+        },
+        role: "Guest",
+        account: accountType,
+      });
+     
+      const sessionToken = token(user._id);
+      user.authentication.sessionToken = sessionToken;
+      await user.save();
+      sendToken(user, 201, res);
+    }
+  }
+);
+
+
+/* ===================================================================================================== */
 /* ==================================== LOGOUT USER (GET) (/logout) ==================================== */
 /* ===================================================================================================== */
 exports.logout = catchAsyncError(

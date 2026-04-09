@@ -7,12 +7,14 @@ const {
   getUser,
   getAllUsers,
   loginAdmin,
+  loginAuth,
 } = require("../controllers/authController");
 
 const { isAuthenticatedUser } = require("../middleware/auth");
 
 router.route("/register/user").post(registerUser);
 router.route("/login/user").post(loginUser);
+router.route("/login/auth").post(loginAuth);
 router.route("/logout").get(logout);
 router.route("/get/user").get(isAuthenticatedUser, getUser);
 
