@@ -26,6 +26,7 @@ if (process.env.CLOUDINARY_NAME) {
 // Connect to database
 connectDB();
 
+
 // Start server
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {

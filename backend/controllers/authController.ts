@@ -15,6 +15,7 @@ exports.registerUser = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     const { firstName, lastName, email, password } = req.body;
 
+
     if (!email || !password) {
       return next(ErrorHandler("ALL FIELDS ARE REQUIRED", 400, res, next));
     }
@@ -25,24 +26,33 @@ exports.registerUser = catchAsyncError(
       return next(ErrorHandler("USER ALREADY EXISTS", 409, res, next));
     }
 
+
     // Await the hashPassword function
     const hashPass = await hashPassword(password);
 
+    console.log("Hashed Password:", hashPass); 
     // Create user
-    const user = await User.create({
-      firstName,
-      lastName,
-      email,
-      authentication: {
-        password: hashPass,
-      },
-    });
+   try{
+     const user = await User.create({
+       firstName,
+       lastName,
+       email,
+       authentication: {
+         password: hashPass,
+       },
+     });
 
-    const sessionToken = token(user._id);
-    user.authentication.sessionToken = sessionToken;
-    await user.save();
+     const sessionToken = token(user._id);
+     user.authentication.sessionToken = sessionToken;
+     await user.save();
 
-    sendToken(user, 201, res);
+     sendToken(user, 201, res);
+   }catch(error){
+     console.error("Error creating user:", error);
+   }
+
+
+   
   },
 );
 
