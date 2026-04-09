@@ -106,19 +106,14 @@ exports.loginAuth = catchAsyncError(
       accountType,
     }: {
       email: string;
-      name: string;
       accountType: string;
     } = req.body;
-
-    //Generating Random UserName
-    function getSixDigitRandom(): number {
-      return Math.floor(100000 + Math.random() * 900000);
-    }
 
 
     const accountUser = await User.find({ account: accountType });
     let finalUser = accountUser.filter((val) => val.email === email);
 
+    console.log("Final User:", finalUser); // Debugging log
     if (finalUser.length !== 0) {
       const user = await User.findById(finalUser[0]._id);
       if (user) {

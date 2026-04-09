@@ -55,12 +55,10 @@ const userSchema = new Schema<IUser>(
   {
     firstName: {
       type: String,
-      required: true,
       trim: true,
     },
     lastName: {
       type: String,
-      required: true,
       trim: true,
     },
     email: {
