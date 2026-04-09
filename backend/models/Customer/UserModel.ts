@@ -89,7 +89,6 @@ const userSchema = new Schema<IUser>(
     role: {
       type: String,
       default: "User",
-      enum: ["User", "Admin", "Moderator"],
     },
     orders: [orderSchema],
     phone: {
