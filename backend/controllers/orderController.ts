@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { Order } from "../models/Order/OrderModel"; 
 import  User  from "../models/Customer/UserModel"; 
+import Product from "../models/Product/ProductModel";
 import ErrorHandler from "../utils/errorhandler";
 
 const catchAsyncError = require("../middleware/catchAsyncError")
@@ -157,14 +158,13 @@ export const createOrder = catchAsyncError(
                 // Generate unique order ID
                 const orderId = await generateOrderId(guestUserId);
 
-                // Map order items
+                // Map order items for Order collection
                 const mappedOrderItems = orderItems.map((item: any) => {
                     const itemId = item.id || item._id || item.productId || item.variantId;
                     const itemPrice = Number(item.price);
                     const itemQuantity = Number(item.quantity);
 
                     return {
-                        
                         id: itemId,
                         title: item.title || item.name || item.productName,
                         price: itemPrice,
@@ -172,6 +172,20 @@ export const createOrder = catchAsyncError(
                         thumbnail: item.thumbnail || item.image || item.imageUrl || "",
                         total: itemPrice * itemQuantity,
                         selectedSize: item.selectedSize || item.size || undefined
+                    };
+                });
+
+                // Map order items for User schema (different structure)
+                const userOrderItems = orderItems.map((item: any) => {
+                    const itemPrice = Number(item.price);
+                    const itemQuantity = Number(item.quantity);
+
+                    return {
+                        productName: item.title || item.name || item.productName,
+                        variantId: item.id || item._id || item.productId || item.variantId,
+                        quantity: itemQuantity,
+                        price: itemPrice,
+                        status: null // Not delivered/cancelled/returned yet
                     };
                 });
 
@@ -228,7 +242,6 @@ export const createOrder = catchAsyncError(
                         transactionId: bankPayment.transactionId
                     } : {}
                 };
-                
 
                 const orderData: any = {
                     user: req.user ? req.user._id : null,
@@ -248,7 +261,6 @@ export const createOrder = catchAsyncError(
                     notes: notes || "",
                     trackingNumber: shippingMethod.trackingNumber || "",
                     estimatedDelivery: shippingMethod.estimatedDelivery || "",
-                    // Optional: Store guest info for reference
                     guestInfo: {
                         email: shippingInfo.email,
                         phone: shippingInfo.phone,
@@ -281,18 +293,51 @@ export const createOrder = catchAsyncError(
                     };
                 }
 
-                // Create order directly without user association
+                // Create order in Order collection
                 const order = await Order.create(orderData);
+
+                // *** IMPORTANT: Add order to user's orders array if user is logged in ***
+                if (req.user && req.user._id) {
+                    try {
+                        // Find the user
+                        const user = await User.findById(req.user._id);
+
+                        if (user) {
+                            // Prepare order for user's orders array (matching User schema structure)
+                            const userOrder = {
+                                items: userOrderItems,
+                                totalAmount: total,
+                                orderDate: new Date(),
+                                status: paymentMethod.type === 'cod' ? 'pending' : 'processing',
+                                trackingNumber: shippingMethod.trackingNumber || "",
+                                estimatedDelivery: shippingMethod.estimatedDelivery ? new Date(shippingMethod.estimatedDelivery) : undefined
+                            };
+
+                            // Add order to user's orders array
+                            user.orders.push(userOrder);
+                            await user.save();
+
+                            console.log(`Order ${orderId} added to user ${user.email}'s orders`);
+                        }
+                    } catch (userError) {
+                        // Log error but don't fail the order creation
+                        console.error('Error adding order to user:', userError);
+                        // You might want to implement a retry mechanism or background job here
+                    }
+                }
 
                 // Return the created order
                 return res.status(201).json({
                     success: true,
-                    message: 'Order created successfully',
+                    message: req.user && req.user._id
+                        ? 'Order created successfully and added to your account'
+                        : 'Order created successfully as guest',
                     order,
                     orderId: order.orderId,
                     orderStatus: order.orderStatus,
                     total: order.total,
-                    estimatedDelivery: order.estimatedDelivery
+                    estimatedDelivery: order.estimatedDelivery,
+                    isGuest: !(req.user && req.user._id)
                 });
 
             } catch (error: any) {
@@ -374,48 +419,220 @@ export const getAdminOrders = catchAsyncError(
 
 
 
-/* =====================================================================================================*/
+/* ===================================================================================================== */
 /* ================================ Update Order Status (PUT) (/order/:id/status) ================*/
 /* ==================================================================================================== */
 export const updateOrderStatus = catchAsyncError(
-  async (req: Request, res: Response, next: NextFunction) => {
-    const { id } = req.params;
-    const { status, notes } = req.body;
+    async (req: Request, res: Response, next: NextFunction) => {
+        const { id } = req.params;
+        const { status, notes } = req.body;
 
-    const initialOrder = await Order.findOne({orderId: id });
+        // First, add stockDeducted field to your Order schema (temporarily using type assertion)
+        const initialOrder = await Order.findOne({ orderId: id }) as any;
 
-    const validStatuses = ['pending', 'processing', 'confirmed', 'shipped', 'delivered', 'cancelled', 'refunded'];
-    
-    if (!validStatuses.includes(status)) {
-      return next(ErrorHandler('Invalid order status', 400, res, next));
-    }
-
-    const order = await Order.findByIdAndUpdate(
-      initialOrder?._id,
-      {
-        orderStatus: status,
-        updatedAt: new Date().toISOString(),
-        $push: {
-          statusHistory: {
-            status,
-            notes,
-            timestamp: new Date().toISOString()
-          }
+        if (!initialOrder) {
+            return next(ErrorHandler('Order not found', 404, res, next));
         }
-      },
-      { new: true, runValidators: true }
-    );
 
-    if (!order) {
-      return next(ErrorHandler('Order not found', 404, res, next));
+        const validStatuses = ['pending', 'processing', 'confirmed', 'shipped', 'delivered', 'cancelled', 'refunded'];
+
+        if (!validStatuses.includes(status)) {
+            return next(ErrorHandler('Invalid order status', 400, res, next));
+        }
+
+        // Check if stock needs to be deducted (only for these statuses)
+        const stockDeductStatuses = ['confirmed', 'shipped', 'delivered'];
+        const shouldDeductStock = stockDeductStatuses.includes(status) && !initialOrder.stockDeducted;
+
+        // Check if stock needs to be restored (for cancelled/refunded orders)
+        const restoreStockStatuses = ['cancelled', 'refunded'];
+        const shouldRestoreStock = restoreStockStatuses.includes(status) && initialOrder.stockDeducted;
+
+        // Handle stock deduction
+        if (shouldDeductStock) {
+            for (const item of initialOrder.items) {
+                // Find the product by ID or SKU
+                const product = await Product.findById(item.id);
+
+                if (!product) {
+                    return next(
+                        ErrorHandler(`Product not found with ID: ${item.id} or SKU: ${item.title}`, 404, res, next)
+                    );
+                }
+
+                // Check main stock quantity
+                if (product.stock_quantity < item.quantity) {
+                    return next(
+                        ErrorHandler(
+                            `Insufficient main stock for product: ${product.title}. Available: ${product.stock_quantity}, Required: ${item.quantity}`,
+                            400,
+                            res,
+                            next
+                        )
+                    );
+                }
+
+                // Handle size-specific stock deduction (using selectedSize from order item)
+                if (item.selectedSize && product.sizes && product.sizes.length > 0) {
+                    const sizeIndex = product.sizes.findIndex(
+                        (s) => s.title.toLowerCase() === item.selectedSize!.toLowerCase()
+                    );
+
+                    if (sizeIndex === -1) {
+                        return next(
+                            ErrorHandler(
+                                `Size "${item.selectedSize}" not found for product: ${product.title}. Available sizes: ${product.sizes.map(s => s.title).join(', ')}`,
+                                404,
+                                res,
+                                next
+                            )
+                        );
+                    }
+
+                    if (product.sizes[sizeIndex].stock_quantity < item.quantity) {
+                        return next(
+                            ErrorHandler(
+                                `Insufficient stock for size "${item.selectedSize}" of product: ${product.title}. Available: ${product.sizes[sizeIndex].stock_quantity}, Required: ${item.quantity}`,
+                                400,
+                                res,
+                                next
+                            )
+                        );
+                    }
+
+                    // Deduct size stock
+                    product.sizes[sizeIndex].stock_quantity -= item.quantity;
+                }
+
+                // Note: Your current OrderItem doesn't have a color field
+                // If you add color support in the future, uncomment this:
+                /*
+                if (item.selectedColor && product.colors && product.colors.length > 0) {
+                  const colorIndex = product.colors.findIndex(
+                    (c) => c.title.toLowerCase() === item.selectedColor!.toLowerCase()
+                  );
+                  
+                  if (colorIndex === -1) {
+                    return next(
+                      ErrorHandler(
+                        `Color "${item.selectedColor}" not found for product: ${product.title}. Available colors: ${product.colors.map(c => c.title).join(', ')}`,
+                        404,
+                        res,
+                        next
+                      )
+                    );
+                  }
+        
+                  if (product.colors[colorIndex].stock_quantity < item.quantity) {
+                    return next(
+                      ErrorHandler(
+                        `Insufficient stock for color "${item.selectedColor}" of product: ${product.title}. Available: ${product.colors[colorIndex].stock_quantity}, Required: ${item.quantity}`,
+                        400,
+                        res,
+                        next
+                      )
+                    );
+                  }
+        
+                  product.colors[colorIndex].stock_quantity -= item.quantity;
+                }
+                */
+
+                // Deduct main stock quantity
+                product.stock_quantity -= item.quantity;
+
+                // Increment purchase count
+                product.purchase_count = (product.purchase_count || 0) + item.quantity;
+
+                // Save the updated product
+                await product.save();
+            }
+        }
+
+        // Handle stock restoration (for cancelled/refunded orders)
+        if (shouldRestoreStock) {
+            for (const item of initialOrder.items) {
+                const product = await Product.findById(item.id);
+
+                if (!product) {
+                    return next(
+                        ErrorHandler(`Product not found with ID: ${item.id}`, 404, res, next)
+                    );
+                }
+
+                // Restore main stock quantity
+                product.stock_quantity += item.quantity;
+
+                // Decrement purchase count (but don't go below 0)
+                product.purchase_count = Math.max(0, (product.purchase_count || 0) - item.quantity);
+
+                // Restore size-specific stock
+                if (item.selectedSize && product.sizes && product.sizes.length > 0) {
+                    const sizeIndex = product.sizes.findIndex(
+                        (s) => s.title.toLowerCase() === item.selectedSize!.toLowerCase()
+                    );
+
+                    if (sizeIndex !== -1) {
+                        product.sizes[sizeIndex].stock_quantity += item.quantity;
+                    }
+                }
+
+                // Restore color-specific stock (if implemented in future)
+                /*
+                if (item.selectedColor && product.colors && product.colors.length > 0) {
+                  const colorIndex = product.colors.findIndex(
+                    (c) => c.title.toLowerCase() === item.selectedColor!.toLowerCase()
+                  );
+                  
+                  if (colorIndex !== -1) {
+                    product.colors[colorIndex].stock_quantity += item.quantity;
+                  }
+                }
+                */
+
+                await product.save();
+            }
+        }
+
+        // Update order status and add to history
+        const updateData: any = {
+            orderStatus: status,
+            updatedAt: new Date().toISOString(),
+            $push: {
+                statusHistory: {
+                    status,
+                    notes: notes || '',
+                    timestamp: new Date().toISOString()
+                }
+            }
+        };
+
+        // Add stockDeducted flag (you need to add this field to your Order schema)
+        if (shouldDeductStock) {
+            updateData.stockDeducted = true;
+        } else if (shouldRestoreStock) {
+            updateData.stockDeducted = false;
+        }
+
+        const updatedOrder = await Order.findByIdAndUpdate(
+            initialOrder._id,
+            updateData,
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedOrder) {
+            return next(ErrorHandler('Failed to update order', 500, res, next));
+        }
+
+        // Get all orders for response
+        const orders = await Order.find().sort({ orderDate: -1 });
+
+        res.status(200).json({
+            success: true,
+            message: `Order status updated to ${status}${shouldDeductStock ? ' and stock has been deducted' :
+                    shouldRestoreStock ? ' and stock has been restored' : ''
+                }`,
+            orders
+        });
     }
-
-    const orders  = await Order.find().sort({ orderDate: -1 });
-
-    res.status(200).json({
-      success: true,
-      message: `Order status updated to ${status}`,
-      orders
-    });
-  }
 );
