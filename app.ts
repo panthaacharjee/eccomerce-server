@@ -22,7 +22,8 @@ app.use(express.json({ limit: "50mb" }));
 const corsOptions = {
   origin: [
     "http://localhost:3000",
-    "https://eccomerce-user-panel.vercel.app" // Your local development
+    "https://eccomerce-user-panel.vercel.app",
+    "https://eccomerce-admin-panel.vercel.app"
 
   ],
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
