@@ -158,13 +158,14 @@ export const createOrder = catchAsyncError(
                 // Generate unique order ID
                 const orderId = await generateOrderId(guestUserId);
 
-                // Map order items for Order collection
+                // Map order items
                 const mappedOrderItems = orderItems.map((item: any) => {
                     const itemId = item.id || item._id || item.productId || item.variantId;
                     const itemPrice = Number(item.price);
                     const itemQuantity = Number(item.quantity);
 
                     return {
+                        
                         id: itemId,
                         title: item.title || item.name || item.productName,
                         price: itemPrice,
@@ -172,20 +173,6 @@ export const createOrder = catchAsyncError(
                         thumbnail: item.thumbnail || item.image || item.imageUrl || "",
                         total: itemPrice * itemQuantity,
                         selectedSize: item.selectedSize || item.size || undefined
-                    };
-                });
-
-                // Map order items for User schema (different structure)
-                const userOrderItems = orderItems.map((item: any) => {
-                    const itemPrice = Number(item.price);
-                    const itemQuantity = Number(item.quantity);
-
-                    return {
-                        productName: item.title || item.name || item.productName,
-                        variantId: item.id || item._id || item.productId || item.variantId,
-                        quantity: itemQuantity,
-                        price: itemPrice,
-                        status: null // Not delivered/cancelled/returned yet
                     };
                 });
 
@@ -242,6 +229,7 @@ export const createOrder = catchAsyncError(
                         transactionId: bankPayment.transactionId
                     } : {}
                 };
+                
 
                 const orderData: any = {
                     user: req.user ? req.user._id : null,
@@ -261,6 +249,7 @@ export const createOrder = catchAsyncError(
                     notes: notes || "",
                     trackingNumber: shippingMethod.trackingNumber || "",
                     estimatedDelivery: shippingMethod.estimatedDelivery || "",
+                    // Optional: Store guest info for reference
                     guestInfo: {
                         email: shippingInfo.email,
                         phone: shippingInfo.phone,
@@ -293,51 +282,26 @@ export const createOrder = catchAsyncError(
                     };
                 }
 
-                // Create order in Order collection
+                // Create order directly without user association
                 const order = await Order.create(orderData);
 
-                // *** IMPORTANT: Add order to user's orders array if user is logged in ***
-                if (req.user && req.user._id) {
-                    try {
-                        // Find the user
-                        const user = await User.findById(req.user._id);
-
-                        if (user) {
-                            // Prepare order for user's orders array (matching User schema structure)
-                            const userOrder = {
-                                items: userOrderItems,
-                                totalAmount: total,
-                                orderDate: new Date(),
-                                status: paymentMethod.type === 'cod' ? 'pending' : 'processing',
-                                trackingNumber: shippingMethod.trackingNumber || "",
-                                estimatedDelivery: shippingMethod.estimatedDelivery ? new Date(shippingMethod.estimatedDelivery) : undefined
-                            };
-
-                            // Add order to user's orders array
-                            user.orders.push(userOrder);
-                            await user.save();
-
-                            console.log(`Order ${orderId} added to user ${user.email}'s orders`);
-                        }
-                    } catch (userError) {
-                        // Log error but don't fail the order creation
-                        console.error('Error adding order to user:', userError);
-                        // You might want to implement a retry mechanism or background job here
+                if(order){
+                    const user = await User.findById(req.user?._id);
+                    if(user){
+                        user.orders.push(order._id as any);
+                        await user.save();
                     }
                 }
 
                 // Return the created order
                 return res.status(201).json({
                     success: true,
-                    message: req.user && req.user._id
-                        ? 'Order created successfully and added to your account'
-                        : 'Order created successfully as guest',
+                    message: 'Order created successfully',
                     order,
                     orderId: order.orderId,
                     orderStatus: order.orderStatus,
                     total: order.total,
-                    estimatedDelivery: order.estimatedDelivery,
-                    isGuest: !(req.user && req.user._id)
+                    estimatedDelivery: order.estimatedDelivery
                 });
 
             } catch (error: any) {
