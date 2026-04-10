@@ -253,28 +253,12 @@ exports.loginAdmin = catchAsyncError(
 /* ===================================================================================================== */
 exports.getAllUsers = catchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
-    const users = await User.find(); // Remove populate since orders are embedded
+    const users = await User.find().populate("orders"); 
 
-    // Transform users to ensure orders.items are accessible
-    const transformedUsers = users.map(user => {
-      const userObj = user.toObject();
-
-      // Ensure each order has items array
-      if (userObj.orders && Array.isArray(userObj.orders)) {
-        userObj.orders = userObj.orders.map(order => ({
-          ...order,
-          items: order.items || [] // Ensure items array exists
-        }));
-      }
-
-      return userObj;
-    });
-
-    console.log("All Users:", JSON.stringify(transformedUsers, null, 2));
 
     res.status(200).json({
       success: true,
-      users: transformedUsers,
+      users: users,
     });
   },
 );
