@@ -1,7 +1,10 @@
 import { Request, Response } from "express";
+import cron from "node-cron";
 
 const express = require("express");
 const app = express();
+
+
 
 const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
@@ -60,6 +63,15 @@ app.get("/api/v1/testing/server", (req: Request, res: Response) => {
     message: "SUCCESS SERVER RUNNING",
     arrayData: ["Pantha", 25, { Pantha: "Pantha" }],
   });
+});
+
+
+cron.schedule('*/5 * * * *', async () => {
+  try {
+    console.log('Self API called:');
+  } catch (error: any) {
+    console.error('Error:', error.message);
+  }
 });
 
 app.use(errorMiddleware);
